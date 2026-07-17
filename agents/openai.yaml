@@ -1,0 +1,4 @@
+interface:
+  display_name: "Retro Game Mechanics"
+  short_description: "Unpack retro games and explain their mechanics"
+  default_prompt: "Use $retro-game-mechanics to unpack this authorized game artifact and explain the original game mechanics comprehensively."
