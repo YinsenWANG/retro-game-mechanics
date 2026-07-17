@@ -15,6 +15,18 @@ The platform-independent mechanism analysis begins after extraction. Do not embe
 
 ## Available adapters
 
+### Game Boy Advance
+
+**Status:** implemented and tested for non-destructive static metadata inspection.
+
+**Inputs:** raw `.gba`, `.agb`, or explicitly identified `.bin` cartridge images, from 192 bytes through 32 MiB.
+
+**Scripts:** `scripts/gba_rom.py` validates and reports the cartridge header, entry branch, file hash, common save/peripheral markers, and aligned ROM-pointer heuristics. `scripts/gba_analyze.py` performs conservative from-ROM ARM/Thumb control-flow discovery and BIOS LZ77 stream validation. Neither script copies ROM bytes or extracts assets by default.
+
+**References:** `references/gba-cartridge-format.md`, `references/gba-from-scratch.md`
+
+**Limits:** header validity does not establish authenticity or provenance; markers, function boundaries, code/data boundaries and pointer scans are hypotheses until cross-referenced or traced; indirect control flow and full instruction decoding require an external engine or further adapter work.
+
 ### PICO-8
 
 **Status:** implemented and tested.

@@ -51,6 +51,18 @@ python3 scripts/create_analysis_case.py GAME.p8.png CASE_DIR \
 
 Do not copy the original artifact into a case unless retention is permitted.
 
+### Game Boy Advance adapter
+
+For an authorized raw `.gba` or `.agb` cartridge image, read `references/gba-cartridge-format.md` and `references/gba-from-scratch.md` before inspection.
+
+```bash
+python3 scripts/gba_rom.py GAME.gba --json
+python3 scripts/gba_rom.py GAME.gba --output gba-manifest.json
+python3 scripts/gba_analyze.py GAME.gba --output gba-static-analysis.json
+```
+
+Use the result as the first pass of a from-ROM recovery workflow, not as a title-specific source substitute. Do not infer code/data boundaries, compression, assets, save hardware, ARM/Thumb state, or gameplay behavior from header fields or string markers alone. Clearly separate decoded instructions, reconstructed pseudocode, hypotheses, and runtime observations. The adapter intentionally does not copy ROM bytes or extract copyrighted assets.
+
 ## Interpret rather than merely index
 
 Treat parser output as discovery evidence, not the final analysis:
