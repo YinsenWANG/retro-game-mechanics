@@ -1,10 +1,20 @@
 # Retro Game Mechanics
 
-`retro-game-mechanics` is a Codex skill for studying how classic games actually work and turning that understanding into useful creative input for new game development.
+`retro-game-mechanics` is a portable Agent Skill for studying how classic games actually work and turning that understanding into useful creative input for new game development. It can be used with Cherry Studio, Claude Code, Codex, OpenCode, and other clients that support the Agent Skills format.
 
 Many newer models are already very good at writing game code. The harder and more valuable problem is often elsewhere: a game needs a strong idea, a compelling core loop, readable rules, meaningful choices, and mechanisms that create memorable situations. Code can implement those things, but it does not invent their quality by itself.
 
 This skill helps an agent investigate old games as evidence-rich design systems. It traces controls, state machines, entities, physics, collision, resources, level structure, pacing, feedback, and the interactions that make a compact game engaging. The result is a mechanics dossier that can give a new game creator concrete inspiration without copying the original game's expressive assets or pretending that a list of features is the same as good design.
+
+## Compatible clients
+
+The skill is client-agnostic. Install or link this directory according to the conventions of your Agent Skills-compatible tool, then invoke `retro-game-mechanics` from:
+
+- Cherry Studio
+- Claude Code
+- Codex
+- OpenCode
+- Other tools that support the Agent Skills directory and `SKILL.md` convention
 
 ## What it supports
 
