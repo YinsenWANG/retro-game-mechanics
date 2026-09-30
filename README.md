@@ -53,8 +53,28 @@ The goal is to understand the original game deeply enough that a later creative 
 
 ## Validation
 
+From the repository root, run the synthetic regression suite using only Python's
+standard library:
+
 ```bash
-python3 -m py_compile scripts/*.py
-python3 /Users/cherryai001/.codex/skills/.system/skill-creator/scripts/quick_validate.py .
+python3 -m unittest discover -s tests -v
 git diff --check
 ```
+
+On systems where Python is named `python`, use `python -m unittest discover -s tests -v`.
+No installed Agent Skill, emulator, ROM, BIOS, network access, or external Python
+package is needed. Fixtures generate original bytes and clean up temporary files
+inside the checkout.
+
+Coverage includes PNG filters, CRC/chunk structure and bounded inflation;
+P8SCII and legacy/pxa code decoding; GBA headers, pointer/marker heuristics,
+ARM/Thumb control-flow candidates and BIOS LZ77 structure; and successful and
+malformed-input CLI runs. Malformed inputs return exit status 2 with an `error:`
+message on stderr. CI runs the same suite on Linux, macOS, and Windows.
+
+These are synthetic parser regressions, not emulator or real-cartridge
+compatibility certification. The PNG adapter accepts non-interlaced 8-bit RGBA
+cartridges at 160×205 and checks that size before inflation. Text cartridges
+must have a PICO-8 header and valid UTF-8. GBA headers and compression candidates
+do not establish authenticity or runtime use, and the instruction decoder and
+CFG remain conservative approximations.

@@ -35,6 +35,7 @@ class Insn:
     targets: list[tuple[int, str]] = field(default_factory=list)
     terminates: bool = False
     fallthrough: bool = True
+    literal_target_mode: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -88,7 +89,8 @@ def decode_arm(data: bytes, offset: int) -> Insn:
                     operands += f" =0x{value:08x}"
                     if ROM_BASE <= (value & ~1) < ROM_BASE + len(data):
                         targets.append(((value & ~1) - ROM_BASE, "literal-pointer"))
-            return Insn(offset, 4, "arm", word, op + suffix, operands, targets)
+            return Insn(offset, 4, "arm", word, op + suffix, operands, targets,
+                        literal_target_mode="thumb" if targets and value & 1 else "arm")
     if (word & 0x0E000000) == 0x08000000:  # block transfer
         load = bool(word & (1 << 20)); rn = (word >> 16) & 0xF; regs = word & 0xFFFF
         names = [f"r{i}" for i in range(16) if regs & (1 << i)]
@@ -140,7 +142,8 @@ def decode_thumb(data: bytes, offset: int) -> Insn:
             operands += f" =0x{value:08x}"
             if ROM_BASE <= (value & ~1) < ROM_BASE + len(data):
                 targets.append(((value & ~1) - ROM_BASE, "literal-pointer"))
-        return Insn(offset, 2, "thumb", half, "ldr", operands, targets)
+        return Insn(offset, 2, "thumb", half, "ldr", operands, targets,
+                    literal_target_mode="thumb" if targets and value & 1 else "arm")
     if (half & 0xF600) == 0xB400:  # PUSH/POP
         pop = bool(half & 0x0800); extra = bool(half & 0x0100)
         regs = [f"r{i}" for i in range(8) if half & (1 << i)]
@@ -164,6 +167,8 @@ def _valid_offset(data: bytes, offset: int, mode: str) -> bool:
 
 
 def discover_cfg(data: bytes, seeds: list[tuple[int, str]], max_instructions: int) -> dict[str, object]:
+    if max_instructions <= 0:
+        raise ValueError("max_instructions must be positive")
     queue = deque(seeds)
     decoded: dict[tuple[int, str], Insn] = {}
     function_seeds: set[tuple[int, str]] = set(seeds)
@@ -182,11 +187,9 @@ def discover_cfg(data: bytes, seeds: list[tuple[int, str]], max_instructions: in
                     edges.add((pos, target, kind)); queue.append((target, mode))
                     if kind == "call": function_seeds.add((target, mode))
                 elif kind == "literal-pointer":
-                    value = struct.unpack_from("<I", data, target)[0] if target <= len(data) - 4 else 0
-                    target_mode = "thumb" if value & 1 else "arm"
-                    actual = (value & ~1) - ROM_BASE
-                    if _valid_offset(data, actual, target_mode):
-                        function_seeds.add((actual, target_mode))
+                    target_mode = ins.literal_target_mode or mode
+                    if _valid_offset(data, target, target_mode):
+                        function_seeds.add((target, target_mode))
             if ins.terminates or not ins.fallthrough: break
             pos += ins.size
     ordered = [decoded[k].as_dict() for k in sorted(decoded)]
@@ -226,6 +229,8 @@ def _lz77_block(data: bytes, start: int) -> dict[str, int] | None:
 
 
 def scan_lz77(data: bytes, alignment: int = 4) -> list[dict[str, int]]:
+    if alignment <= 0:
+        raise ValueError("alignment must be positive")
     blocks = []
     for offset in range(0, len(data) - 4, alignment):
         block = _lz77_block(data, offset)
@@ -234,6 +239,8 @@ def scan_lz77(data: bytes, alignment: int = 4) -> list[dict[str, int]]:
 
 
 def analyze(path: Path, max_instructions: int) -> dict[str, object]:
+    if max_instructions <= 0:
+        raise ValueError("max_instructions must be positive")
     data = path.read_bytes()
     metadata = inspect_rom(path)
     entry = int(metadata["header"]["entry_point"].get("target_rom_offset", 0))  # type: ignore[index,union-attr]

@@ -98,7 +98,9 @@ def _paeth(a: int, b: int, c: int) -> int:
     return a if da <= db and da <= dc else b if db <= dc else c
 
 
-def decode_rgba_png(data: bytes) -> tuple[int, int, bytes]:
+def decode_rgba_png(
+    data: bytes, *, expected_size: tuple[int, int] | None = None
+) -> tuple[int, int, bytes]:
     """Decode a non-interlaced 8-bit RGBA PNG into row-major bytes."""
     if not data.startswith(PNG_SIGNATURE):
         raise CartError("not a PNG file")
@@ -106,29 +108,61 @@ def decode_rgba_png(data: bytes) -> tuple[int, int, bytes]:
     pos = len(PNG_SIGNATURE)
     width = height = None
     compressed = bytearray()
-    while pos + 12 <= len(data):
+    seen_idat = ended_idat = False
+    while True:
+        if pos + 12 > len(data):
+            raise CartError("truncated PNG chunk or missing IEND")
         length = struct.unpack(">I", data[pos : pos + 4])[0]
         kind = data[pos + 4 : pos + 8]
+        if length > 0x7FFFFFFF or pos + 12 + length > len(data):
+            raise CartError("truncated or oversized PNG chunk")
         payload = data[pos + 8 : pos + 8 + length]
+        crc = struct.unpack_from(">I", data, pos + 8 + length)[0]
+        if zlib.crc32(kind + payload) & 0xFFFFFFFF != crc:
+            raise CartError("PNG chunk CRC mismatch")
         pos += 12 + length
+        if width is None and kind != b"IHDR":
+            raise CartError("PNG must start with IHDR")
         if kind == b"IHDR":
+            if width is not None or length != 13:
+                raise CartError("invalid or duplicate PNG IHDR")
             width, height, depth, color_type, compression, filtering, interlace = struct.unpack(
                 ">IIBBBBB", payload
             )
+            if not (0 < width <= 0x7FFFFFFF and 0 < height <= 0x7FFFFFFF):
+                raise CartError("invalid PNG dimensions")
             if (depth, color_type, compression, filtering, interlace) != (8, 6, 0, 0, 0):
                 raise CartError("expected a non-interlaced 8-bit RGBA PNG")
+            if expected_size is not None and (width, height) != expected_size:
+                raise CartError(f"expected {expected_size[0]}x{expected_size[1]}, got {width}x{height}")
         elif kind == b"IDAT":
+            if ended_idat:
+                raise CartError("PNG IDAT chunks must be consecutive")
+            seen_idat = True
             compressed.extend(payload)
         elif kind == b"IEND":
+            if length or not seen_idat or pos != len(data):
+                raise CartError("invalid PNG IEND, missing IDAT, or trailing data")
             break
+        else:
+            if seen_idat:
+                ended_idat = True
+            if kind != b"PLTE" and not kind[0] & 0x20:
+                raise CartError("unsupported critical PNG chunk")
 
-    if width is None or height is None:
-        raise CartError("PNG has no IHDR chunk")
-    raw = zlib.decompress(bytes(compressed))
     stride = width * 4
     expected = height * (stride + 1)
+    if expected >= sys.maxsize:
+        raise CartError("PNG dimensions exceed decoder capacity")
+    try:
+        inflater = zlib.decompressobj()
+        raw = inflater.decompress(bytes(compressed), expected + 1)
+    except zlib.error as exc:
+        raise CartError(f"invalid PNG zlib stream: {exc}") from exc
     if len(raw) != expected:
         raise CartError(f"unexpected PNG data length: {len(raw)} != {expected}")
+    if not inflater.eof or inflater.unconsumed_tail or inflater.unused_data:
+        raise CartError("truncated PNG zlib stream or trailing compressed data")
 
     decoded = bytearray(height * stride)
     src = 0
@@ -157,9 +191,7 @@ def decode_rgba_png(data: bytes) -> tuple[int, int, bytes]:
 
 
 def payload_from_png(data: bytes) -> bytes:
-    width, height, rgba = decode_rgba_png(data)
-    if (width, height) != (CART_WIDTH, CART_HEIGHT):
-        raise CartError(f"expected {CART_WIDTH}x{CART_HEIGHT}, got {width}x{height}")
+    width, height, rgba = decode_rgba_png(data, expected_size=(CART_WIDTH, CART_HEIGHT))
     payload = bytearray()
     for i in range(0, len(rgba), 4):
         red, green, blue, alpha = rgba[i : i + 4]
@@ -171,8 +203,12 @@ def payload_from_png(data: bytes) -> bytes:
 
 def decompress_code(code_region: bytes) -> str:
     header = code_region[:4]
+    if header in (b"\x00pxa", b":c:\x00") and len(code_region) < 8:
+        raise CartError("truncated compressed code header")
     if header == b"\x00pxa":
         unc_size, compressed_size = struct.unpack(">HH", code_region[4:8])
+        if not 8 <= compressed_size <= len(code_region):
+            raise CartError("invalid pxa compressed size")
         stream = code_region[8:compressed_size]
         reader = BitReader(stream)
         mtf = list(range(256))
@@ -182,6 +218,8 @@ def decompress_code(code_region: bytes) -> str:
                 extra = 0
                 while reader.bit():
                     extra += 1
+                    if extra > 4:
+                        raise CartError("invalid pxa move-to-front index")
                 index = reader.bits(4 + extra) + ((1 << (4 + extra)) - 16)
                 if index >= len(mtf):
                     raise CartError("invalid pxa move-to-front index")
@@ -200,7 +238,8 @@ def decompress_code(code_region: bytes) -> str:
                         value = reader.bits(8)
                         if value == 0:
                             break
-                        output.append(value)
+                        if len(output) < unc_size:
+                            output.append(value)
                 else:
                     count = 3
                     while True:
@@ -210,15 +249,15 @@ def decompress_code(code_region: bytes) -> str:
                             break
                     if offset > len(output):
                         raise CartError("invalid pxa back-reference")
-                    for _ in range(count):
+                    for _ in range(min(count, unc_size - len(output))):
                         output.append(output[-offset])
         return p8scii_to_unicode(output[:unc_size])
 
     if header == b":c:\x00":
         unc_size = struct.unpack(">H", code_region[4:6])[0]
         pos = 8
-        output: list[str] = []
-        while pos < len(code_region):
+        output = bytearray()
+        while len(output) < unc_size and pos < len(code_region):
             value = code_region[pos]
             pos += 1
             if value == 0:
@@ -228,9 +267,9 @@ def decompress_code(code_region: bytes) -> str:
                 pos += 1
                 if literal == 0:
                     break
-                output.append(chr(literal))
+                output.append(literal)
             elif value <= 0x3B:
-                output.append(OLD_TABLE[value])
+                output.append(ord(OLD_TABLE[value]))
             else:
                 if pos >= len(code_region):
                     raise CartError("truncated legacy back-reference")
@@ -238,26 +277,30 @@ def decompress_code(code_region: bytes) -> str:
                 pos += 1
                 count = (second >> 4) + 2
                 offset = ((value - 0x3C) << 4) + (second & 0x0F)
-                if offset > len(output):
+                if offset == 0 or offset > len(output):
                     raise CartError("invalid legacy back-reference")
-                for _ in range(count):
+                for _ in range(min(count, unc_size - len(output))):
                     output.append(output[-offset])
-        return p8scii_to_unicode(bytes(ord(value) for value in "".join(output)[:unc_size]))
+        if len(output) != unc_size:
+            raise CartError("truncated legacy compressed stream")
+        return p8scii_to_unicode(output)
 
     return p8scii_to_unicode(code_region.split(b"\x00", 1)[0])
 
 
 def parse_p8_text(text: str) -> Cartridge:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines[0].startswith("pico-8 cartridge"):
+        raise CartError("expected a PICO-8 text cartridge header")
     version = None
     sections: dict[str, list[str]] = {}
     current = None
     for line in lines:
         if line.startswith("version ") and version is None:
             try:
-                version = int(line.split(maxsplit=1)[1])
-            except ValueError:
-                pass
+                version = int(line[len("version "):])
+            except ValueError as exc:
+                raise CartError("invalid PICO-8 cartridge version") from exc
         if line.startswith("__") and line.endswith("__"):
             candidate = line.strip("_").lower()
             if candidate in SECTION_NAMES:
@@ -272,7 +315,7 @@ def parse_p8_text(text: str) -> Cartridge:
 
 def read_cartridge(cart_path: Path) -> Cartridge:
     data = cart_path.read_bytes()
-    if data.startswith(PNG_SIGNATURE):
+    if data.startswith(PNG_SIGNATURE) or cart_path.suffix.lower() == ".png":
         payload = payload_from_png(data)
         rom = payload[:ROM_SIZE]
         code = decompress_code(payload[ROM_SIZE:CART_SIZE])
@@ -281,7 +324,10 @@ def read_cartridge(cart_path: Path) -> Cartridge:
         if len(data) != CART_SIZE:
             raise CartError(f"expected a {CART_SIZE}-byte raw cartridge, got {len(data)} bytes")
         return Cartridge("p8.rom", None, decompress_code(data[ROM_SIZE:CART_SIZE]), {}, data[:ROM_SIZE])
-    return parse_p8_text(data.decode("utf-8", errors="replace"))
+    try:
+        return parse_p8_text(data.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise CartError("invalid UTF-8 text cartridge") from exc
 
 
 def cartridge_summary(cart: Cartridge) -> dict[str, object]:
