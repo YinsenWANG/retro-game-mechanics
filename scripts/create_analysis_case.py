@@ -29,6 +29,7 @@ def main() -> int:
     try:
         raw = args.cartridge.read_bytes()
         cart = read_cartridge(args.cartridge)
+        result = analyze(cart, args.cartridge.name)
         args.case_dir.mkdir(parents=True, exist_ok=False)
         manifest = {
             "title": args.title,
@@ -42,7 +43,6 @@ def main() -> int:
             "notes": "Verify current source terms before publishing, modifying, redistributing, or commercializing any derivative.",
         }
         (args.case_dir / "rights.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        result = analyze(cart, args.cartridge.name)
         result["rights"] = manifest
         (args.case_dir / "static-analysis.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         (args.case_dir / "static-analysis.md").write_text(markdown_report(result), encoding="utf-8")
